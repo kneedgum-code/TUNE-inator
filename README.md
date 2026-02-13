@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TUNE-inator</title>
+    <title>TUNE-inator - Drum Tuner</title>
+    <!-- Externe libraries via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -43,7 +44,6 @@
 
         const eras = ["60's", "70's", "80's", "90's", "00's", "10's", "20's"];
 
-        // Functie om Hertz naar Muzikale Noot om te zetten (Scientific Pitch Notation)
         const freqToNote = (freq) => {
             if (!freq || freq <= 0) return "-";
             const notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -64,14 +64,15 @@
             const [volumeLevel, setVolumeLevel] = useState(0);
             const [selectedTomIdx, setSelectedTomIdx] = useState(0);
 
+            // Standaard instellingen: 4 toms (10, 12, 14, 16) en Rock stijl
             const [kitSettings, setKitSettings] = useState({
-                numToms: 2,
-                tomSizes: [12, 16],
+                numToms: 4,
+                tomSizes: [10, 12, 14, 16],
                 snareSize: 14,
                 bassSize: 22,
                 soundStyle: 'rock',
                 eraIndex: 6,
-                resoMode: 0 // -1: Top Lager, 0: Gelijk (Max Reso), 1: Top Hoger
+                resoMode: 0
             });
 
             const audioContextRef = useRef(null);
@@ -81,7 +82,6 @@
 
             const t = translations.nl;
 
-            // Bereken basis frequentie voor een specifieke trommel
             const calculateBasePitch = (size, type) => {
                 let base = 180;
                 if (type === 'snare') base = 280 - (size - 13) * 15;
@@ -95,7 +95,6 @@
                 return base;
             };
 
-            // Logica voor Lug Pitch doelfrequenties
             const getLugTargets = (targetIdx = selectedTomIdx) => {
                 let size = 12;
                 let type = currentMode;
@@ -119,7 +118,7 @@
                 return {
                     top: Math.round(top),
                     bottom: Math.round(bottom),
-                    fundamental: Math.round(baseLugPitch * 0.7) // Geschatte grondtoon van de ketel
+                    fundamental: Math.round(baseLugPitch * 0.7)
                 };
             };
 
@@ -167,7 +166,10 @@
                     source.connect(analyser);
                     analyserRef.current = analyser;
                     return true;
-                } catch (e) { return false; }
+                } catch (e) { 
+                    console.error("Audio error:", e);
+                    return false; 
+                }
             };
 
             const toggleTuner = async () => {
@@ -286,7 +288,7 @@
                                     </div>
 
                                     {currentMode === 'toms' && (
-                                        <div className="flex justify-center gap-3 mb-6 animate-in slide-in-from-top-2">
+                                        <div className="flex justify-center flex-wrap gap-3 mb-6 animate-in slide-in-from-top-2">
                                             {kitSettings.tomSizes.map((s, idx) => {
                                                 const targets = getLugTargets(idx);
                                                 return (
@@ -351,7 +353,12 @@
                                     <input type="range" min="1" max="5" value={kitSettings.numToms} onChange={(e) => {
                                         const n = parseInt(e.target.value);
                                         const s = [...kitSettings.tomSizes];
-                                        if (n > s.length) while(s.length < n) s.push(10 + s.length*2);
+                                        if (n > s.length) {
+                                            while(s.length < n) {
+                                                const lastSize = s[s.length - 1] || 10;
+                                                s.push(lastSize + 2);
+                                            }
+                                        }
                                         else s.length = n;
                                         setKitSettings({...kitSettings, numToms: n, tomSizes: s});
                                     }} className={`w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-${theme.accent}-500`} />
