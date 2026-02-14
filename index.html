@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TUNE-inator</title>
+    <title>TUNE-inator - Drum Tuner</title>
+    <!-- Externe libraries via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -35,15 +36,26 @@
                 detecting: "Grondtoon gevonden", waiting: "Sla rustig bij een lug...",
                 kitSettings: "Kit Instellingen", numToms: "Aantal Toms", tomSizes: "Tom Maten (Inches)",
                 soundStyle: "Klank Karakter", saveGen: "OPSLAAN & TOEPASSEN",
-                era: "Tijdvak (Era)", warning: "Sla zachtjes aan bij de lug voor de beste meting.",
+                warning: "Sla zachtjes aan bij de lug voor de beste meting.",
                 topLug: "Lug Pitch - Slagvel", bottomLug: "Lug Pitch - Reso", 
-                resoType: "Resonantie Karakter", resoDesc: "Relatie tussen Slagvel en Reso"
+                resoType: "Resonantie Karakter", resoDesc: "Relatie tussen Slagvel en Reso",
+                snareStyle: "Snare Karakter", snareLow: "Thuddy Low", snareHigh: "Cracky High",
+                lang: "Taal / Language"
+            },
+            en: {
+                tuner: "Tuner", settings: "Settings", start: "START", stop: "STOP",
+                tare: "FILTER / REF", back: "BACK", hertz: "HERTZ", deltaHz: "OFFSET",
+                detecting: "Fundamental found", waiting: "Tap gently near a lug...",
+                kitSettings: "Kit Settings", numToms: "Number of Toms", tomSizes: "Tom Sizes (Inches)",
+                soundStyle: "Sound Style", saveGen: "SAVE & APPLY",
+                warning: "Tap gently at the lug for the best measurement.",
+                topLug: "Lug Pitch - Top", bottomLug: "Lug Pitch - Reso", 
+                resoType: "Resonance Character", resoDesc: "Top vs Reso relationship",
+                snareStyle: "Snare Character", snareLow: "Thuddy Low", snareHigh: "Cracky High",
+                lang: "Taal / Language"
             }
         };
 
-        const eras = ["60's", "70's", "80's", "90's", "00's", "10's", "20's"];
-
-        // Functie om Hertz naar Muzikale Noot om te zetten (Scientific Pitch Notation)
         const freqToNote = (freq) => {
             if (!freq || freq <= 0) return "-";
             const notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -56,6 +68,7 @@
 
         function App() {
             const [view, setView] = useState('tuner');
+            const [language, setLanguage] = useState('nl');
             const [isRunning, setIsRunning] = useState(false);
             const [currentMode, setCurrentMode] = useState('toms');
             const [frequency, setFrequency] = useState(0);
@@ -64,14 +77,15 @@
             const [volumeLevel, setVolumeLevel] = useState(0);
             const [selectedTomIdx, setSelectedTomIdx] = useState(0);
 
+            // Standaard instellingen: 4 toms (10, 12, 14, 16)
             const [kitSettings, setKitSettings] = useState({
-                numToms: 2,
-                tomSizes: [12, 16],
+                numToms: 4,
+                tomSizes: [10, 12, 14, 16],
                 snareSize: 14,
                 bassSize: 22,
                 soundStyle: 'rock',
-                eraIndex: 6,
-                resoMode: 0 // -1: Top Lager, 0: Gelijk (Max Reso), 1: Top Hoger
+                snareTuning: 0.5, // 0 to 1 slider
+                resoMode: 0
             });
 
             const audioContextRef = useRef(null);
@@ -79,14 +93,19 @@
             const animationRef = useRef(null);
             const lastUpdateRef = useRef(0);
 
-            const t = translations.nl;
+            const t = translations[language];
 
-            // Bereken basis frequentie voor een specifieke trommel
             const calculateBasePitch = (size, type) => {
                 let base = 180;
-                if (type === 'snare') base = 280 - (size - 13) * 15;
-                else if (type === 'bass') base = 75 - (size - 18) * 3;
-                else base = 210 - (size - 8) * 11;
+                if (type === 'snare') {
+                    // Snare slider logic: Low (220Hz) to High (350Hz)
+                    base = 220 + (kitSettings.snareTuning * 130);
+                    base = base - (size - 14) * 15;
+                } else if (type === 'bass') {
+                    base = 75 - (size - 18) * 3;
+                } else {
+                    base = 210 - (size - 8) * 11;
+                }
 
                 const style = kitSettings.soundStyle;
                 if (style === 'metal') base *= 0.85; 
@@ -95,7 +114,6 @@
                 return base;
             };
 
-            // Logica voor Lug Pitch doelfrequenties
             const getLugTargets = (targetIdx = selectedTomIdx) => {
                 let size = 12;
                 let type = currentMode;
@@ -119,20 +137,25 @@
                 return {
                     top: Math.round(top),
                     bottom: Math.round(bottom),
-                    fundamental: Math.round(baseLugPitch * 0.7) // Geschatte grondtoon van de ketel
+                    fundamental: Math.round(baseLugPitch * 0.7)
                 };
             };
 
             const lugTargets = getLugTargets();
 
             const getResoLabel = () => {
-                if (kitSettings.resoMode === -1) return "Warm (Top Lager)";
-                if (kitSettings.resoMode === 0) return "Lange Reso (Gelijk)";
-                return "Attack (Top Hoger)";
+                if (language === 'nl') {
+                    if (kitSettings.resoMode === -1) return "Warm (Top Lager)";
+                    if (kitSettings.resoMode === 0) return "Lange Reso (Gelijk)";
+                    return "Attack (Top Hoger)";
+                } else {
+                    if (kitSettings.resoMode === -1) return "Warm (Top Lower)";
+                    if (kitSettings.resoMode === 0) return "Sustain (Equal)";
+                    return "Attack (Top Higher)";
+                }
             };
 
             const getTheme = () => {
-                const era = eras[kitSettings.eraIndex];
                 const style = kitSettings.soundStyle;
                 let bg = "bg-slate-950";
                 let card = "bg-slate-900 border-slate-800 shadow-2xl";
@@ -142,13 +165,6 @@
                 if (style === 'jazz') accent = "amber";
                 if (style === 'dry') accent = "slate";
 
-                if (era === "60's" || era === "70's") {
-                    bg = "bg-stone-900 bg-[radial-gradient(#2c241a_1px,transparent_1px)] [background-size:20px_20px]";
-                    card = "bg-stone-800/90 border-orange-900/30 shadow-[10px_10px_0px_0px_rgba(124,45,18,0.3)]";
-                } else if (era === "80's" || era === "90's") {
-                    bg = "bg-indigo-950 bg-[linear-gradient(to_right,#1e1b4b_1px,transparent_1px),linear-gradient(to_bottom,#1e1b4b_1px,transparent_1px)] [background-size:40px_40px]";
-                    card = "bg-slate-900/80 border-fuchsia-500/50 shadow-[0_0_20px_rgba(217,70,239,0.2)] backdrop-blur-md";
-                }
                 return { bg, card, accent };
             };
 
@@ -167,7 +183,10 @@
                     source.connect(analyser);
                     analyserRef.current = analyser;
                     return true;
-                } catch (e) { return false; }
+                } catch (e) { 
+                    console.error("Audio error:", e);
+                    return false; 
+                }
             };
 
             const toggleTuner = async () => {
@@ -200,7 +219,7 @@
                 const now = Date.now();
                 if (maxVal > -45 && (now - lastUpdateRef.current > 300)) {
                     const nyquist = audioContextRef.current.sampleRate / 2;
-                    const ranges = { bass: [30, 150], snare: [150, 600], toms: [60, 450] };
+                    const ranges = { bass: [30, 150], snare: [150, 700], toms: [60, 500] };
                     const [minHz, maxHz] = ranges[currentMode];
                     const lowBin = Math.floor((minHz / nyquist) * bufferLength);
                     const highBin = Math.ceil((maxHz / nyquist) * bufferLength);
@@ -234,7 +253,7 @@
                                 <div className={`w-10 h-10 bg-${theme.accent}-600 rounded-xl flex items-center justify-center font-black shadow-lg italic`}>Ti</div>
                                 <div>
                                     <h1 className="text-xl font-black uppercase tracking-tighter leading-none">TUNE-inator</h1>
-                                    <span className={`text-[10px] font-bold uppercase tracking-[0.2em] text-${theme.accent}-500`}>{eras[kitSettings.eraIndex]} • {kitSettings.soundStyle}</span>
+                                    <span className={`text-[10px] font-bold uppercase tracking-[0.2em] text-${theme.accent}-500`}>{kitSettings.soundStyle} Mode</span>
                                 </div>
                             </div>
                             <button onClick={() => setView(view === 'tuner' ? 'settings' : 'tuner')} className="p-3 bg-white/5 rounded-2xl hover:bg-white/10 transition-colors">
@@ -286,7 +305,7 @@
                                     </div>
 
                                     {currentMode === 'toms' && (
-                                        <div className="flex justify-center gap-3 mb-6 animate-in slide-in-from-top-2">
+                                        <div className="flex justify-center flex-wrap gap-3 mb-6 animate-in slide-in-from-top-2">
                                             {kitSettings.tomSizes.map((s, idx) => {
                                                 const targets = getLugTargets(idx);
                                                 return (
@@ -316,6 +335,31 @@
                             <div className={`animate-in slide-in-from-bottom-4 duration-500 ${theme.card} p-8 rounded-[2.5rem] space-y-8`}>
                                 <h2 className="text-xl font-black uppercase tracking-tight">{t.kitSettings}</h2>
                                 
+                                <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t.lang}</span>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setLanguage('nl')} className={`px-4 py-2 rounded-xl text-[10px] font-bold ${language === 'nl' ? `bg-${theme.accent}-600` : 'bg-white/5'}`}>NL</button>
+                                        <button onClick={() => setLanguage('en')} className={`px-4 py-2 rounded-xl text-[10px] font-bold ${language === 'en' ? `bg-${theme.accent}-600` : 'bg-white/5'}`}>EN</button>
+                                    </div>
+                                </div>
+
+                                <div className="p-5 bg-white/5 rounded-3xl border border-white/10">
+                                    <div className="flex justify-between items-end mb-4">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">{t.snareStyle}</label>
+                                            <span className="text-[8px] text-slate-600 uppercase tracking-tighter">Snare Character</span>
+                                        </div>
+                                        <span className={`text-sm font-black text-${theme.accent}-500 italic uppercase tracking-tighter`}>
+                                            {kitSettings.snareTuning < 0.3 ? t.snareLow : kitSettings.snareTuning > 0.7 ? t.snareHigh : 'Standard'}
+                                        </span>
+                                    </div>
+                                    <input type="range" min="0" max="1" step="0.01" value={kitSettings.snareTuning} onChange={(e) => setKitSettings({...kitSettings, snareTuning: parseFloat(e.target.value)})} className={`w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-${theme.accent}-500`} />
+                                    <div className="flex justify-between mt-2 text-[8px] font-bold text-slate-600 uppercase tracking-widest">
+                                        <span className="w-1/2 text-left">{t.snareLow}</span>
+                                        <span className="w-1/2 text-right">{t.snareHigh}</span>
+                                    </div>
+                                </div>
+
                                 <div className="p-5 bg-white/5 rounded-3xl border border-white/10">
                                     <div className="flex justify-between items-end mb-4">
                                         <div>
@@ -351,7 +395,12 @@
                                     <input type="range" min="1" max="5" value={kitSettings.numToms} onChange={(e) => {
                                         const n = parseInt(e.target.value);
                                         const s = [...kitSettings.tomSizes];
-                                        if (n > s.length) while(s.length < n) s.push(10 + s.length*2);
+                                        if (n > s.length) {
+                                            while(s.length < n) {
+                                                const lastSize = s[s.length - 1] || 10;
+                                                s.push(lastSize + 2);
+                                            }
+                                        }
                                         else s.length = n;
                                         setKitSettings({...kitSettings, numToms: n, tomSizes: s});
                                     }} className={`w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-${theme.accent}-500`} />
@@ -377,14 +426,6 @@
                                             <button key={s} onClick={() => setKitSettings({...kitSettings, soundStyle: s})} className={`py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${kitSettings.soundStyle === s ? `bg-${theme.accent}-600 shadow-lg` : 'bg-white/5 text-slate-500'}`}>{s}</button>
                                         ))}
                                     </div>
-                                </div>
-
-                                <div>
-                                    <div className="flex justify-between items-end mb-4">
-                                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{t.era}</label>
-                                        <span className={`text-2xl font-black italic text-${theme.accent}-500`}>{eras[kitSettings.eraIndex]}</span>
-                                    </div>
-                                    <input type="range" min="0" max="6" value={kitSettings.eraIndex} onChange={(e) => setKitSettings({...kitSettings, eraIndex: parseInt(e.target.value)})} className={`w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-${theme.accent}-500`} />
                                 </div>
 
                                 <button onClick={() => setView('tuner')} className="w-full py-5 bg-white text-black rounded-3xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all">
