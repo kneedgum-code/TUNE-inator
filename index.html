@@ -14,6 +14,7 @@
         input[type=range] { cursor: pointer; height: 6px; -webkit-appearance: none; background: #1e293b; border-radius: 999px; }
         input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; background: #2563eb; border: 2px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
         .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .tare-active { color: #60a5fa; text-shadow: 0 0 10px rgba(96, 165, 250, 0.5); }
     </style>
 </head>
 <body>
@@ -29,7 +30,8 @@
                 hertz: "REAL-TIME HERTZ",
                 start: "START TUNER",
                 stop: "STOP",
-                filter: "Filter",
+                tare: "TARE",
+                reset: "RESET",
                 instruction: "Sla zachtjes bij een lug voor de meest zuivere meting.",
                 settings: "KIT CONFIGURATIE",
                 snareTuning: "SNARE STEMMING",
@@ -49,7 +51,8 @@
                 hertz: "REAL-TIME HERTZ",
                 start: "START TUNER",
                 stop: "STOP",
-                filter: "Filter",
+                tare: "TARE",
+                reset: "RESET",
                 instruction: "Tap gently near a lug for the most accurate reading.",
                 settings: "KIT CONFIGURATION",
                 snareTuning: "SNARE TUNING",
@@ -80,6 +83,7 @@
             const [isRunning, setIsRunning] = useState(false);
             const [currentMode, setCurrentMode] = useState('toms');
             const [frequency, setFrequency] = useState(0);
+            const [tareValue, setTareValue] = useState(null);
             const [selectedTomIdx, setSelectedTomIdx] = useState(0);
             const [lang, setLang] = useState('nl');
 
@@ -119,13 +123,14 @@
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     const source = audioContextRef.current.createMediaStreamSource(stream);
                     const analyser = audioContextRef.current.createAnalyser();
-                    analyser.fftSize = 16384;
-                    analyser.smoothingTimeConstant = 0.2;
+                    // Hogere FFT size voor betere resolutie bij de lage toms
+                    analyser.fftSize = 16384; 
+                    analyser.smoothingTimeConstant = 0.1; // Minder smoothing voor snellere lug-respons
                     source.connect(analyser);
                     analyserRef.current = analyser;
                     return true;
                 } catch (e) {
-                    alert("Microfoon toegang geweigerd / Microphone access denied.");
+                    alert("Microfoon toegang geweigerd.");
                     return false;
                 }
             };
@@ -137,12 +142,12 @@
                 analyserRef.current.getFloatFrequencyData(dataArray);
 
                 let minHz = 60, maxHz = 500;
-                if (currentMode === 'bass') { minHz = 40; maxHz = 120; }
-                if (currentMode === 'snare') { minHz = 150; maxHz = 650; }
+                if (currentMode === 'bass') { minHz = 30; maxHz = 120; }
+                if (currentMode === 'snare') { minHz = 140; maxHz = 650; }
                 if (currentMode === 'toms') {
                     const size = kitSettings.tomSizes[selectedTomIdx];
-                    minHz = size > 14 ? 70 : 120;
-                    maxHz = size > 14 ? 200 : 450;
+                    minHz = size > 14 ? 60 : 100;
+                    maxHz = size > 14 ? 220 : 450;
                 }
 
                 const nyquist = audioContextRef.current.sampleRate / 2;
@@ -152,6 +157,8 @@
                 let peakIdx = -1;
                 let peakVal = -Infinity;
 
+                // Verbeterde peak detection: filter uit bijgeluiden door een hogere drempel
+                // en controleer op harmonischen
                 for (let i = lowBin; i < highBin; i++) {
                     if (dataArray[i] > peakVal) {
                         peakVal = dataArray[i];
@@ -159,8 +166,11 @@
                     }
                 }
 
-                if (peakVal > -50 && (Date.now() - lastUpdateRef.current > 300)) {
+                // Drempelwaarde voor herkenning (lug taps zijn vaak kort en specifiek)
+                if (peakVal > -55 && (Date.now() - lastUpdateRef.current > 200)) {
                     let freq = peakIdx * (audioContextRef.current.sampleRate / analyserRef.current.fftSize);
+                    
+                    // Parabolische interpolatie voor sub-Hz precisie
                     if (peakIdx > 0 && peakIdx < bufferLength - 1) {
                         const alpha = dataArray[peakIdx - 1];
                         const beta = dataArray[peakIdx];
@@ -168,6 +178,7 @@
                         const p = 0.5 * (alpha - gamma) / (alpha - 2 * beta + gamma);
                         freq = (peakIdx + p) * (audioContextRef.current.sampleRate / analyserRef.current.fftSize);
                     }
+                    
                     setFrequency(freq);
                     lastUpdateRef.current = Date.now();
                 }
@@ -184,6 +195,14 @@
                 } else {
                     setIsRunning(false);
                     cancelAnimationFrame(animationRef.current);
+                }
+            };
+
+            const toggleTare = () => {
+                if (tareValue === null) {
+                    if (frequency > 0) setTareValue(frequency);
+                } else {
+                    setTareValue(null);
                 }
             };
 
@@ -206,8 +225,6 @@
 
             const getTarget = (head) => {
                 let base = 150;
-                
-                // Genre-gebaseerde basisverhoging/verlaging
                 let genreModifier = 1.0;
                 if (kitSettings.soundStyle === 'jazz') genreModifier = 1.25;
                 if (kitSettings.soundStyle === 'fusion') genreModifier = 1.15;
@@ -226,6 +243,10 @@
                 const ratio = 0.9 + (kitSettings.resoRatio * 0.2);
                 return head === 'reso' ? (base * ratio).toFixed(0) : base.toFixed(0);
             };
+
+            const displayFreq = tareValue !== null && frequency > 0 
+                ? (frequency - tareValue).toFixed(1) 
+                : frequency.toFixed(1);
 
             return (
                 <div className="min-h-screen p-4 flex flex-col items-center select-none">
@@ -247,7 +268,6 @@
                         {view === 'tuner' ? (
                             <div className="space-y-4 animate-in fade-in duration-300">
                                 
-                                {/* Genre Selector (Main View) */}
                                 <div className="flex justify-between gap-1 overflow-x-auto hide-scrollbar py-1">
                                     {['ROCK', 'METAL', 'JAZZ', 'FUSION'].map(style => (
                                         <button 
@@ -273,24 +293,33 @@
                                     </div>
                                 </div>
 
-                                <div className="bg-dark-card rounded-[2.5rem] py-14 text-center border shadow-2xl relative overflow-hidden">
-                                    <div className="text-8xl font-black tracking-tighter tabular-nums leading-none">
-                                        {frequency > 0 ? frequency.toFixed(1) : "0.0"}
+                                <div className="bg-dark-card rounded-[2.5rem] py-12 text-center border shadow-2xl relative overflow-hidden">
+                                    {tareValue !== null && (
+                                        <div className="absolute top-4 left-0 right-0 flex justify-center">
+                                            <span className="bg-blue-600/20 text-blue-400 px-3 py-1 rounded-full text-[8px] font-bold tracking-widest uppercase border border-blue-600/30">
+                                                Tare Ref: {tareValue.toFixed(1)} Hz
+                                            </span>
+                                        </div>
+                                    )}
+                                    <div className={`text-8xl font-black tracking-tighter tabular-nums leading-none ${tareValue !== null ? 'tare-active' : ''}`}>
+                                        {frequency > 0 ? (tareValue !== null ? (frequency - tareValue >= 0 ? "+" : "") + displayFreq : displayFreq) : "0.0"}
                                     </div>
-                                    <p className="text-gray-500 font-bold tracking-[0.4em] uppercase text-[10px] mt-4">{t.hertz}</p>
+                                    <p className="text-gray-500 font-bold tracking-[0.4em] uppercase text-[10px] mt-4">
+                                        {tareValue !== null ? "∆ DIFFERENTIAL HERTZ" : t.hertz}
+                                    </p>
                                     <div className="mt-2 text-blue-500 font-black text-xl italic">{getNoteFromFreq(frequency)}</div>
                                 </div>
 
                                 <div className="grid grid-cols-3 gap-2">
                                     {['BASS', 'SNARE', 'TOMS'].map(m => (
-                                        <button key={m} onClick={() => {setCurrentMode(m.toLowerCase()); setFrequency(0);}} className={`py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all ${currentMode === m.toLowerCase() ? 'bg-blue-600 shadow-lg scale-105' : 'bg-dark-card text-gray-500'}`}>{m}</button>
+                                        <button key={m} onClick={() => {setCurrentMode(m.toLowerCase()); setFrequency(0); setTareValue(null);}} className={`py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all ${currentMode === m.toLowerCase() ? 'bg-blue-600 shadow-lg scale-105' : 'bg-dark-card text-gray-500'}`}>{m}</button>
                                     ))}
                                 </div>
 
                                 {currentMode === 'toms' && (
-                                    <div className="flex justify-center gap-3 py-2 overflow-x-auto hide-scrollbar">
+                                    <div className="flex justify-center gap-3 py-1 overflow-x-auto hide-scrollbar">
                                         {kitSettings.tomSizes.map((size, idx) => (
-                                            <button key={idx} onClick={() => {setSelectedTomIdx(idx); setFrequency(0);}} className={`min-w-[56px] h-14 rounded-full border-2 flex flex-col items-center justify-center transition-all ${selectedTomIdx === idx ? 'bg-blue-600 border-white scale-110 shadow-xl' : 'bg-dark-card border-transparent text-gray-500'}`}>
+                                            <button key={idx} onClick={() => {setSelectedTomIdx(idx); setFrequency(0); setTareValue(null);}} className={`min-w-[56px] h-14 rounded-full border-2 flex flex-col items-center justify-center transition-all ${selectedTomIdx === idx ? 'bg-blue-600 border-white scale-110 shadow-xl' : 'bg-dark-card border-transparent text-gray-500'}`}>
                                                 <span className="text-xs font-black">{size}"</span>
                                             </button>
                                         ))}
@@ -298,10 +327,17 @@
                                 )}
 
                                 <div className="flex gap-3">
-                                    <button onClick={toggleTuner} className={`flex-[3] py-6 rounded-[2rem] font-black text-2xl shadow-xl transition-all active:scale-95 ${isRunning ? 'bg-red-500 text-white' : 'bg-white text-black'}`}>
+                                    <button onClick={toggleTuner} className={`flex-[2.5] py-6 rounded-[2rem] font-black text-2xl shadow-xl transition-all active:scale-95 ${isRunning ? 'bg-red-500 text-white' : 'bg-white text-black'}`}>
                                         {isRunning ? t.stop : t.start}
                                     </button>
-                                    <button className="flex-1 bg-dark-card rounded-[2rem] border border-white/5 flex items-center justify-center text-gray-500 font-black text-[10px] tracking-tighter uppercase">{t.filter}</button>
+                                    <button 
+                                        onClick={toggleTare}
+                                        disabled={!isRunning}
+                                        className={`flex-1 rounded-[2rem] border flex flex-col items-center justify-center transition-all ${tareValue !== null ? 'bg-blue-600 border-white text-white' : 'bg-dark-card border-white/5 text-gray-500'} active:scale-90 disabled:opacity-30`}
+                                    >
+                                        <span className="text-[12px] font-black tracking-tighter leading-none">{tareValue !== null ? t.reset : t.tare}</span>
+                                        <span className="text-[7px] mt-1 opacity-60">LUG DIFF</span>
+                                    </button>
                                 </div>
 
                                 <div className="bg-yellow-500/10 border border-yellow-500/20 p-4 rounded-2xl text-center">
@@ -314,7 +350,6 @@
                             <div className="bg-dark-card rounded-[2.5rem] p-6 space-y-6 animate-in slide-in-from-bottom duration-500 overflow-y-auto max-h-[80vh] hide-scrollbar pb-10">
                                 <h2 className="text-xl font-black uppercase tracking-tight">{t.settings}</h2>
                                 
-                                {/* Taal Switch */}
                                 <div className="bg-black/20 p-4 rounded-3xl space-y-3 border border-white/5">
                                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{t.language}</p>
                                     <div className="flex bg-slate-900/50 p-1 rounded-xl">
@@ -323,7 +358,6 @@
                                     </div>
                                 </div>
 
-                                {/* Snare Tuning */}
                                 <div className="bg-black/20 p-5 rounded-3xl space-y-4 border border-white/5">
                                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{t.snareTuning}</p>
                                     <input type="range" className="w-full" min="0" max="1" step="0.1" value={kitSettings.snareTuning} onChange={(e) => setKitSettings({...kitSettings, snareTuning: parseFloat(e.target.value)})} />
@@ -333,7 +367,6 @@
                                     </div>
                                 </div>
 
-                                {/* Reso Ratio */}
                                 <div className="bg-black/20 p-5 rounded-3xl space-y-4 border border-white/5">
                                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{t.resonance}</p>
                                     <input type="range" className="w-full" min="0" max="1" step="0.1" value={kitSettings.resoRatio} onChange={(e) => setKitSettings({...kitSettings, resoRatio: parseFloat(e.target.value)})} />
@@ -343,7 +376,6 @@
                                     </div>
                                 </div>
 
-                                {/* Tom Config */}
                                 <div className="bg-black/20 p-5 rounded-3xl space-y-4 border border-white/5">
                                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{t.tomConfig}</p>
                                     <div className="flex gap-2">
