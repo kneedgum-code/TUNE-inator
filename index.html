@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TUNE-inator | Professional Drum Tuner</title>
+    <title>DRUM TUNE-inator | Professional Drum Tuner</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -120,12 +120,18 @@
                     audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
                 }
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false
+                        } 
+                    });
                     const source = audioContextRef.current.createMediaStreamSource(stream);
                     const analyser = audioContextRef.current.createAnalyser();
-                    // Hogere FFT size voor betere resolutie bij de lage toms
-                    analyser.fftSize = 16384; 
-                    analyser.smoothingTimeConstant = 0.1; // Minder smoothing voor snellere lug-respons
+                    // Maximale resolutie voor lage drum-frequenties
+                    analyser.fftSize = 32768; 
+                    analyser.smoothingTimeConstant = 0.2;
                     source.connect(analyser);
                     analyserRef.current = analyser;
                     return true;
@@ -141,45 +147,55 @@
                 const dataArray = new Float32Array(bufferLength);
                 analyserRef.current.getFloatFrequencyData(dataArray);
 
-                let minHz = 60, maxHz = 500;
-                if (currentMode === 'bass') { minHz = 30; maxHz = 120; }
-                if (currentMode === 'snare') { minHz = 140; maxHz = 650; }
+                let minHz = 50, maxHz = 500;
+                if (currentMode === 'bass') { minHz = 25; maxHz = 100; }
+                if (currentMode === 'snare') { minHz = 150; maxHz = 600; }
                 if (currentMode === 'toms') {
                     const size = kitSettings.tomSizes[selectedTomIdx];
-                    minHz = size > 14 ? 60 : 100;
-                    maxHz = size > 14 ? 220 : 450;
+                    minHz = size > 14 ? 40 : 80;
+                    maxHz = size > 14 ? 180 : 400;
                 }
 
-                const nyquist = audioContextRef.current.sampleRate / 2;
-                const lowBin = Math.floor((minHz / nyquist) * bufferLength);
-                const highBin = Math.ceil((maxHz / nyquist) * bufferLength);
+                const sampleRate = audioContextRef.current.sampleRate;
+                const binWidth = sampleRate / analyserRef.current.fftSize;
+                const lowBin = Math.floor(minHz / binWidth);
+                const highBin = Math.ceil(maxHz / binWidth);
 
-                let peakIdx = -1;
-                let peakVal = -Infinity;
+                // Verbeterde Peak Detection met "Sub-harmonic suppression"
+                // Dit voorkomt dat we de octaaf erboven (206 ipv 106) pakken.
+                let bestFreq = 0;
+                let maxMag = -Infinity;
 
-                // Verbeterde peak detection: filter uit bijgeluiden door een hogere drempel
-                // en controleer op harmonischen
                 for (let i = lowBin; i < highBin; i++) {
-                    if (dataArray[i] > peakVal) {
-                        peakVal = dataArray[i];
-                        peakIdx = i;
+                    let magnitude = dataArray[i];
+                    
+                    // Filter: check of er een sterke component is op de helft van deze frequentie (de echte grondtoon)
+                    // Als we een piek vinden op 200Hz, kijken we of 100Hz ook aanwezig is.
+                    // Zo ja, dan is 100Hz waarschijnlijk de grondtoon.
+                    const halfIdx = Math.floor(i / 2);
+                    if (halfIdx >= lowBin && dataArray[halfIdx] > -70) {
+                        magnitude += dataArray[halfIdx] * 0.8; // Boost de lagere kandidaat
+                    }
+
+                    if (magnitude > maxMag) {
+                        maxMag = magnitude;
+                        bestFreq = i * binWidth;
                     }
                 }
 
-                // Drempelwaarde voor herkenning (lug taps zijn vaak kort en specifiek)
-                if (peakVal > -55 && (Date.now() - lastUpdateRef.current > 200)) {
-                    let freq = peakIdx * (audioContextRef.current.sampleRate / analyserRef.current.fftSize);
-                    
-                    // Parabolische interpolatie voor sub-Hz precisie
-                    if (peakIdx > 0 && peakIdx < bufferLength - 1) {
-                        const alpha = dataArray[peakIdx - 1];
-                        const beta = dataArray[peakIdx];
-                        const gamma = dataArray[peakIdx + 1];
-                        const p = 0.5 * (alpha - gamma) / (alpha - 2 * beta + gamma);
-                        freq = (peakIdx + p) * (audioContextRef.current.sampleRate / analyserRef.current.fftSize);
+                // Noise floor drempel
+                if (maxMag > -60 && (Date.now() - lastUpdateRef.current > 250)) {
+                    // Parabolische interpolatie voor extra precisie
+                    const binIdx = Math.round(bestFreq / binWidth);
+                    if (binIdx > 0 && binIdx < bufferLength - 1) {
+                        const y1 = dataArray[binIdx - 1];
+                        const y2 = dataArray[binIdx];
+                        const y3 = dataArray[binIdx + 1];
+                        const d = (y3 - y1) / (2 * (2 * y2 - y1 - y3));
+                        bestFreq = (binIdx + d) * binWidth;
                     }
-                    
-                    setFrequency(freq);
+
+                    setFrequency(bestFreq);
                     lastUpdateRef.current = Date.now();
                 }
                 animationRef.current = requestAnimationFrame(processAudio);
@@ -256,7 +272,7 @@
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center font-black italic shadow-lg">Ti</div>
                                 <div>
-                                    <h1 className="text-lg font-black tracking-tight uppercase leading-none">TUNE-inator</h1>
+                                    <h1 className="text-lg font-black tracking-tight uppercase leading-none">DRUM TUNE-inator</h1>
                                     <p className="text-[9px] font-bold text-blue-500 uppercase tracking-widest leading-none mt-1">PRO ENGINE v2.5</p>
                                 </div>
                             </div>
@@ -401,7 +417,7 @@
                             </div>
                         )}
                         <footer className="mt-auto py-6 text-center">
-                            <p className="text-[9px] text-gray-600 font-bold tracking-[0.3em] uppercase opacity-50">TUNE-inator Professional Engine v2.5</p>
+                            <p className="text-[9px] text-gray-600 font-bold tracking-[0.3em] uppercase opacity-50">DRUM TUNE-inator Professional Engine v2.5</p>
                         </footer>
                     </div>
                 </div>
