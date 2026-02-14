@@ -3,58 +3,66 @@ import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-// --- Firebase Configuratie ---
-// BELANGRIJK: Vul deze waarden in vanuit je Firebase Console om instellingen op te slaan.
-// Als deze leeg blijven, werkt de app in "Demo Modus" zonder opslag.
-const firebaseConfig = {
-  apiKey: "",
-  authDomain: "",
-  projectId: "",
-  storageBucket: "",
-  messagingSenderId: "",
-  appId: ""
+/**
+ * TUNE-inator PREMIUM
+ * Volledige UI reconstructie gebaseerd op screenshots.
+ */
+
+const getEnv = (key) => {
+  try {
+    return typeof process !== 'undefined' && process.env ? process.env[key] : "";
+  } catch (e) { return ""; }
 };
 
-// Initialiseer Firebase alleen als er een API Key is ingevuld
-let app, auth, db;
-const isFirebaseConfigured = firebaseConfig.apiKey !== "";
+const firebaseConfig = {
+  apiKey: getEnv('REACT_APP_FIREBASE_API_KEY') || "",
+  authDomain: getEnv('REACT_APP_FIREBASE_AUTH_DOMAIN') || "",
+  projectId: getEnv('REACT_APP_FIREBASE_PROJECT_ID') || "",
+  storageBucket: getEnv('REACT_APP_FIREBASE_STORAGE_BUCKET') || "",
+  messagingSenderId: getEnv('REACT_APP_FIREBASE_SENDER_ID') || "",
+  appId: getEnv('REACT_APP_FIREBASE_APP_ID') || ""
+};
 
-if (isFirebaseConfigured) {
-  app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
-  auth = getAuth(app);
-  db = getFirestore(app);
+const isFirebaseEnabled = firebaseConfig.apiKey !== "";
+let db, auth;
+
+if (isFirebaseEnabled) {
+  try {
+    const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (e) { console.error("Firebase init failed", e); }
 }
 
-const APP_ID = 'drum-tuner-pro';
+const APP_ID = 'tune-inator-pro';
 
-// --- Muzikale Hulpmiddelen ---
 const getNoteFromFreq = (freq) => {
   if (!freq || freq < 20) return "-";
   const notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
   const semitones = 12 * (Math.log(freq / 440) / Math.log(2));
   const noteIndex = Math.round(semitones) + 69;
-  const name = notes[noteIndex % 12];
-  const octave = Math.floor(noteIndex / 12) - 1;
-  return `${name}${octave}`;
+  return `${notes[noteIndex % 12]}${Math.floor(noteIndex / 12) - 1}`;
 };
 
 const App = () => {
   const [user, setUser] = useState(null);
-  const [view, setView] = useState('tuner'); 
+  const [view, setView] = useState('tuner');
   const [isRunning, setIsRunning] = useState(false);
-  const [currentMode, setCurrentMode] = useState('toms'); 
+  const [currentMode, setCurrentMode] = useState('toms');
   const [frequency, setFrequency] = useState(0);
-  const [lang, setLang] = useState('nl');
+  const [tareFrequency, setTareFrequency] = useState(null);
   const [selectedTomIdx, setSelectedTomIdx] = useState(0);
 
+  // Uitgebreide kit instellingen gebaseerd op screenshot
   const [kitSettings, setKitSettings] = useState({
-    snareTuning: 0.5,
-    resoRatio: 0.5, 
+    language: 'NL',
+    snareCharacter: 0.5, // Thuddy Low <-> Cracky High
+    resonance: 0.5,      // Top Lager <-> Top Hoger
     bassSize: 22,
     snareSize: 14,
     numToms: 4,
     tomSizes: [10, 12, 14, 16],
-    soundStyle: 'rock'
+    soundStyle: 'ROCK'   // DRY, ROCK, JAZZ, METAL
   });
 
   const audioContextRef = useRef(null);
@@ -62,283 +70,296 @@ const App = () => {
   const animationRef = useRef(null);
   const lastUpdateRef = useRef(0);
 
-  // Authenticatie
   useEffect(() => {
-    if (!isFirebaseConfigured) {
-      console.warn("TUNE-inator: Geen Firebase config gevonden. App draait in offline demo modus.");
-      return;
-    }
-
+    if (!isFirebaseEnabled || !auth) return;
     const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (error) {
-        console.error("Firebase Auth Error:", error);
-      }
+      try { await signInAnonymously(auth); } catch (e) {}
     };
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
+    return onAuthStateChanged(auth, setUser);
   }, []);
 
-  // Synchronisatie
   useEffect(() => {
     if (!user || !db) return;
     const settingsRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'kit');
-    const unsub = onSnapshot(settingsRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setKitSettings(prev => ({...prev, ...docSnap.data()}));
-      }
-    }, (error) => console.error("Firestore Error:", error));
-    return () => unsub();
+    return onSnapshot(settingsRef, (docSnap) => {
+      if (docSnap.exists()) setKitSettings(prev => ({ ...prev, ...docSnap.data() }));
+    }, (err) => console.error(err));
   }, [user]);
 
   const initAudio = async () => {
     if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive', sampleRate: 44100 });
     }
+    if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const analyser = audioContextRef.current.createAnalyser();
-      analyser.fftSize = 16384; 
-      analyser.smoothingTimeConstant = 0.2;
+      analyser.fftSize = 32768;
       source.connect(analyser);
       analyserRef.current = analyser;
       return true;
-    } catch (e) {
-      alert("Microfoon toegang is vereist voor het meten van frequenties.");
-      return false;
-    }
+    } catch (e) { return false; }
   };
 
   const processAudio = () => {
-    if (!analyserRef.current) return;
+    if (!analyserRef.current || !isRunning) return;
     const bufferLength = analyserRef.current.frequencyBinCount;
     const dataArray = new Float32Array(bufferLength);
     analyserRef.current.getFloatFrequencyData(dataArray);
 
-    let minHz = 80, maxHz = 600;
-    if (currentMode === 'bass') { minHz = 40; maxHz = 130; }
-    if (currentMode === 'snare') { minHz = 180; maxHz = 650; }
-    if (currentMode === 'toms') {
-        const size = kitSettings.tomSizes[selectedTomIdx];
-        minHz = size > 14 ? 70 : 130;
-        maxHz = size > 14 ? 250 : 500;
-    }
-
+    let minHz = 30, maxHz = 600;
     const nyquist = audioContextRef.current.sampleRate / 2;
     const lowBin = Math.floor((minHz / nyquist) * bufferLength);
     const highBin = Math.ceil((maxHz / nyquist) * bufferLength);
 
-    let peakIdx = -1;
-    let peakVal = -Infinity;
-
+    let peakIdx = -1, peakVal = -Infinity;
     for (let i = lowBin; i < highBin; i++) {
-      if (dataArray[i] > peakVal) {
-        peakVal = dataArray[i];
-        peakIdx = i;
-      }
+      if (dataArray[i] > peakVal) { peakVal = dataArray[i]; peakIdx = i; }
     }
 
     const now = Date.now();
-    if (peakVal > -50 && (now - lastUpdateRef.current > 300)) {
-        let freq = peakIdx * (audioContextRef.current.sampleRate / analyserRef.current.fftSize);
-        if (peakIdx > 0 && peakIdx < bufferLength - 1) {
-            const alpha = dataArray[peakIdx - 1];
-            const beta = dataArray[peakIdx];
-            const gamma = dataArray[peakIdx + 1];
-            const p = 0.5 * (alpha - gamma) / (alpha - 2 * beta + gamma);
-            freq = (peakIdx + p) * (audioContextRef.current.sampleRate / analyserRef.current.fftSize);
-        }
-        setFrequency(freq);
-        lastUpdateRef.current = now;
+    if (peakVal > -55 && (now - lastUpdateRef.current > 120)) {
+      let freq = peakIdx * (audioContextRef.current.sampleRate / analyserRef.current.fftSize);
+      if (peakIdx > 0 && peakIdx < bufferLength - 1) {
+        const y0 = dataArray[peakIdx - 1], y1 = dataArray[peakIdx], y2 = dataArray[peakIdx + 1];
+        const p = 0.5 * (y0 - y2) / (y0 - 2 * y1 + y2);
+        freq = (peakIdx + p) * (audioContextRef.current.sampleRate / analyserRef.current.fftSize);
+      }
+      setFrequency(freq);
+      lastUpdateRef.current = now;
     }
-
     animationRef.current = requestAnimationFrame(processAudio);
   };
 
-  const toggleTuner = async () => {
-    if (!isRunning) {
-      if (await initAudio()) {
-        setIsRunning(true);
-        processAudio();
-      }
+  useEffect(() => {
+    if (isRunning) processAudio();
+    return () => cancelAnimationFrame(animationRef.current);
+  }, [isRunning, currentMode, selectedTomIdx]);
+
+  const getTargetFreqs = () => {
+    let batter = 188, reso = 188;
+    const styleMod = kitSettings.soundStyle === 'JAZZ' ? 1.2 : kitSettings.soundStyle === 'METAL' ? 0.85 : 1.0;
+    
+    if (currentMode === 'snare') {
+      batter = 280 * styleMod;
+      reso = batter * (1 + (kitSettings.resonance - 0.5));
+    } else if (currentMode === 'bass') {
+      batter = 65 * styleMod;
+      reso = batter;
     } else {
-      setIsRunning(false);
-      cancelAnimationFrame(animationRef.current);
+      const size = kitSettings.tomSizes[selectedTomIdx];
+      batter = (size === 10 ? 188 : size === 12 ? 155 : size === 14 ? 125 : 95) * styleMod;
+      reso = batter * (1 + (kitSettings.resonance - 0.5));
     }
+    return { batter: Math.round(batter), reso: Math.round(reso) };
   };
 
-  const getTarget = (head) => {
-      let base = 188;
-      if (currentMode === 'snare') base = 280;
-      if (currentMode === 'bass') base = 65;
-      if (currentMode === 'toms') {
-          const s = kitSettings.tomSizes[selectedTomIdx];
-          base = s === 10 ? 188 : s === 12 ? 155 : s === 14 ? 125 : 95;
-      }
-      
-      if (head === 'reso') {
-          if (kitSettings.resoRatio < 0.4) return (base * 0.9).toFixed(0);
-          if (kitSettings.resoRatio > 0.6) return (base * 1.1).toFixed(0);
-          return base.toFixed(0);
-      }
-      return base.toFixed(0);
-  };
+  const targets = getTargetFreqs();
 
   return (
-    <div className="min-h-screen bg-[#0a0e1a] text-white font-sans p-4 flex flex-col items-center">
-      <div className="w-full max-w-md flex flex-col h-full">
+    <div className="min-h-screen bg-[#090e18] text-white font-sans selection:bg-blue-500/30 overflow-x-hidden">
+      <div className="max-w-md mx-auto min-h-screen flex flex-col p-6">
         
-        <header className="flex justify-between items-center mb-6">
+        {/* Header */}
+        <header className="flex justify-between items-center mb-8">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-[#2563eb] rounded-xl flex items-center justify-center shadow-lg font-black italic text-sm text-white">Ti</div>
+            <div className="w-11 h-11 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20">
+              <span className="font-black italic text-lg">Ti</span>
+            </div>
             <div>
-              <h1 className="text-lg font-black tracking-tight uppercase leading-none">TUNE-inator</h1>
-              <p className="text-[9px] font-bold tracking-[0.2em] text-[#2563eb] uppercase">{kitSettings.soundStyle} MODE</p>
+              <h1 className="text-lg font-black uppercase tracking-tight leading-none">TUNE-inator</h1>
+              <p className="text-[9px] font-bold text-blue-500 uppercase tracking-widest mt-1">{kitSettings.soundStyle} MODE</p>
             </div>
           </div>
-          <button onClick={() => setView(view === 'tuner' ? 'settings' : 'tuner')} className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center border border-white/10">
-            {view === 'tuner' ? '⚙️' : '✕'}
+          <button 
+            onClick={() => setView(view === 'tuner' ? 'settings' : 'tuner')}
+            className="w-11 h-11 bg-white/5 rounded-xl border border-white/10 flex items-center justify-center hover:bg-white/10 transition-colors"
+          >
+            {view === 'tuner' ? (
+              <svg className="w-5 h-5 opacity-70" fill="currentColor" viewBox="0 0 24 24"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path fillRule="evenodd" d="M1.323 11.447C2.811 6.976 7.028 3.75 12.001 3.75c4.97 0 9.185 3.223 10.675 7.697a1.627 1.627 0 010 1.013c-1.49 4.474-5.705 7.697-10.677 7.697-4.97 0-9.186-3.223-10.675-7.697a1.627 1.627 0 010-1.013zM12 18.75a6.75 6.75 0 110-13.5 6.75 6.75 0 010 13.5z" clipRule="evenodd"/></svg>
+            ) : (
+              <span className="text-xl">✕</span>
+            )}
           </button>
         </header>
 
         {view === 'tuner' ? (
-          <div className="space-y-4">
+          <div className="flex-1 flex flex-col gap-6 animate-in fade-in duration-500">
+            {/* Target Display */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="bg-[#161b2c] border border-white/5 p-4 rounded-3xl text-center">
-                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-2">LUG PITCH - SLAGVEL</p>
-                <p className="text-3xl font-black text-[#60a5fa]">{getTarget('batter')} Hz</p>
-                <p className="text-[10px] font-bold text-slate-400 mt-1">{getNoteFromFreq(getTarget('batter'))}</p>
+              <div className="bg-[#141b2b] p-5 rounded-[1.8rem] border border-white/5 flex flex-col items-center">
+                <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">LUG PITCH - SLAGVEL</span>
+                <span className="text-3xl font-black text-blue-400 italic">{targets.batter} Hz</span>
+                <span className="text-[10px] font-bold text-slate-400 mt-1">{getNoteFromFreq(targets.batter)}</span>
               </div>
-              <div className="bg-[#161b2c] border border-white/5 p-4 rounded-3xl text-center">
-                <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-2">LUG PITCH - RESO</p>
-                <p className="text-3xl font-black text-[#60a5fa]">{getTarget('reso')} Hz</p>
-                <p className="text-[10px] font-bold text-slate-400 mt-1">{getNoteFromFreq(getTarget('reso'))}</p>
+              <div className="bg-[#141b2b] p-5 rounded-[1.8rem] border border-white/5 flex flex-col items-center">
+                <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">LUG PITCH - RESO</span>
+                <span className="text-3xl font-black text-blue-400 italic">{targets.reso} Hz</span>
+                <span className="text-[10px] font-bold text-slate-400 mt-1">{getNoteFromFreq(targets.reso)}</span>
               </div>
             </div>
 
-            <div className="bg-[#161b2c] rounded-[2.5rem] p-10 text-center relative border border-white/5 shadow-2xl">
-              <div className="text-[10rem] font-black tracking-tighter leading-none tabular-nums overflow-hidden min-h-[160px] flex items-center justify-center">
-                {frequency > 0 ? frequency.toFixed(1) : "0.0"}
+            {/* Main Gauge */}
+            <div className="flex-1 bg-[#141b2b] rounded-[2.5rem] flex flex-col items-center justify-center p-8 border border-white/5 relative shadow-inner">
+              <div className="text-[8rem] font-black tracking-tighter tabular-nums leading-none">
+                {tareFrequency !== null ? (frequency - tareFrequency).toFixed(1) : frequency.toFixed(1)}
               </div>
-              <div className="mt-2 h-[2px] w-24 bg-slate-800 mx-auto rounded-full" />
-              <p className="text-slate-500 font-bold tracking-[0.4em] uppercase text-xs mt-4">HERTZ</p>
+              <div className="w-16 h-1 bg-white/10 my-6 rounded-full"></div>
+              <span className="text-sm font-black text-slate-500 tracking-[0.4em] uppercase">HERTZ</span>
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
-              {['BASS', 'SNARE', 'TOMS'].map(m => (
-                <button 
-                  key={m} 
-                  onClick={() => {setCurrentMode(m.toLowerCase()); setFrequency(0);}}
-                  className={`py-4 rounded-2xl text-[10px] font-black tracking-widest transition-all ${currentMode === m.toLowerCase() ? 'bg-[#2563eb] text-white' : 'bg-[#161b2c] text-slate-500'}`}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-
-            {currentMode === 'toms' && (
-              <div className="flex justify-center gap-3 py-2">
-                {kitSettings.tomSizes.map((size, idx) => (
+            {/* Mode Selectors */}
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                {['BASS', 'SNARE', 'TOMS'].map(m => (
                   <button 
-                    key={idx} 
-                    onClick={() => {setSelectedTomIdx(idx); setFrequency(0);}}
-                    className={`w-14 h-14 rounded-full flex flex-col items-center justify-center transition-all border-2 ${selectedTomIdx === idx ? 'bg-[#2563eb] border-white scale-110 shadow-xl' : 'bg-[#161b2c] border-white/5 text-slate-500'}`}
+                    key={m} 
+                    onClick={() => {setCurrentMode(m.toLowerCase()); setFrequency(0); setTareFrequency(null);}}
+                    className={`py-5 rounded-2xl text-[11px] font-black tracking-widest transition-all ${currentMode === m.toLowerCase() ? 'bg-blue-600 shadow-lg shadow-blue-600/30' : 'bg-[#141b2b] text-slate-500'}`}
                   >
-                    <span className="text-[11px] font-black">{size}"</span>
-                    <span className="text-[7px] font-bold opacity-50">{getNoteFromFreq(getTarget('batter'))}</span>
+                    {m}
                   </button>
                 ))}
               </div>
-            )}
 
-            <div className="flex gap-3">
+              {currentMode === 'toms' && (
+                <div className="flex justify-between items-center px-2 py-2">
+                  {kitSettings.tomSizes.map((size, idx) => (
+                    <button 
+                      key={idx} 
+                      onClick={() => {setSelectedTomIdx(idx); setFrequency(0);}}
+                      className={`w-14 h-14 rounded-full flex flex-col items-center justify-center border-2 transition-all ${selectedTomIdx === idx ? 'bg-blue-600 border-white scale-110 shadow-lg' : 'bg-[#141b2b] border-white/5 text-slate-600 text-xs'}`}
+                    >
+                      <span className="text-[12px] font-black">{size}"</span>
+                      <span className="text-[8px] font-bold opacity-60 uppercase">{getNoteFromFreq(getTargetFreqs().batter)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Main Actions */}
+            <div className="grid grid-cols-3 gap-4 mb-2">
               <button 
-                onClick={toggleTuner}
-                className="flex-[2] py-5 bg-white text-black rounded-3xl font-black text-xl shadow-xl active:scale-95 transition-all"
+                onClick={async () => {
+                  if (!isRunning) { const ok = await initAudio(); if (ok) setIsRunning(true); }
+                  else { setIsRunning(false); setFrequency(0); setTareFrequency(null); }
+                }}
+                className={`col-span-2 py-6 rounded-3xl font-black text-xl transition-all active:scale-95 ${isRunning ? 'bg-red-500' : 'bg-white text-black shadow-xl shadow-white/5'}`}
               >
                 {isRunning ? 'STOP' : 'START'}
               </button>
-              <button className="flex-1 py-5 bg-[#161b2c] text-slate-500 rounded-3xl font-black text-[10px] tracking-widest uppercase border border-white/5">
-                FILTER / REF
+              <button 
+                onClick={() => frequency > 0 && setTareFrequency(tareFrequency === null ? frequency : null)}
+                className={`py-6 rounded-3xl font-black text-[10px] tracking-widest transition-all border border-white/10 uppercase ${tareFrequency !== null ? 'bg-blue-600' : 'bg-[#141b2b] text-slate-400'}`}
+              >
+                {tareFrequency !== null ? 'RESET' : 'FILTER / REF'}
               </button>
             </div>
 
-            <div className="bg-[#fbbf24]/5 border border-[#fbbf24]/20 p-4 rounded-2xl text-center">
-              <p className="text-[9px] text-[#fbbf24] font-black tracking-widest uppercase">
-                {!isFirebaseConfigured ? "DEMO MODUS - INSTELLINGEN WORDEN NIET OPGESLAGEN" : "SLA ZACHTJES AAN BIJ DE LUG VOOR DE BESTE METING."}
-              </p>
+            <div className="bg-[#1a140d] border border-orange-900/30 p-4 rounded-2xl text-center">
+              <p className="text-[9px] font-black text-orange-500 uppercase tracking-widest">Sla zachtjes aan bij de lug voor de beste meting.</p>
             </div>
           </div>
         ) : (
-          <div className="bg-[#161b2c] rounded-[2.5rem] p-6 space-y-8 overflow-y-auto max-h-[85vh]">
-            <h2 className="text-xl font-black uppercase tracking-tight">KIT INSTELLINGEN</h2>
-
-            <div className="bg-[#0a0e1a] p-4 rounded-2xl flex justify-between items-center">
-                <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">TAAL / LANGUAGE</span>
-                <div className="flex bg-slate-800 p-1 rounded-lg">
-                    <button onClick={() => setLang('nl')} className={`px-4 py-1.5 rounded-md text-[10px] font-black ${lang === 'nl' ? 'bg-[#2563eb]' : ''}`}>NL</button>
-                    <button onClick={() => setLang('en')} className={`px-4 py-1.5 rounded-md text-[10px] font-black ${lang === 'en' ? 'bg-[#2563eb]' : ''}`}>EN</button>
-                </div>
+          /* Settings View - Reconstructed from IMG_5097.PNG */
+          <div className="flex-1 space-y-6 animate-in slide-in-from-bottom-4 duration-500 overflow-y-auto pb-10">
+            <h2 className="text-xl font-black uppercase tracking-tight">Kit Instellingen</h2>
+            
+            {/* Language Switch */}
+            <div className="bg-[#141b2b] p-6 rounded-[2rem] border border-white/5 flex justify-between items-center">
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Taal / Language</span>
+              <div className="flex bg-[#090e18] p-1 rounded-xl">
+                <button onClick={()=>setKitSettings({...kitSettings, language:'NL'})} className={`px-4 py-2 rounded-lg text-[10px] font-bold transition-all ${kitSettings.language === 'NL' ? 'bg-blue-600' : 'text-slate-500'}`}>NL</button>
+                <button onClick={()=>setKitSettings({...kitSettings, language:'EN'})} className={`px-4 py-2 rounded-lg text-[10px] font-bold transition-all ${kitSettings.language === 'EN' ? 'bg-blue-600' : 'text-slate-500'}`}>EN</button>
+              </div>
             </div>
 
-            <div className="bg-[#0a0e1a] p-5 rounded-2xl space-y-4">
-                <div className="flex justify-between items-end">
-                    <div>
-                        <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">SNARE KARAKTER</p>
-                        <p className="text-[7px] font-bold text-slate-600 uppercase mt-1">SNARE CHARACTER</p>
-                    </div>
-                    <p className="text-[11px] font-black text-[#2563eb] italic uppercase">STANDARD</p>
+            {/* Snare Karakter Slider */}
+            <div className="bg-[#141b2b] p-6 rounded-[2rem] border border-white/5 space-y-6">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Snare Karakter</p>
+                  <p className="text-[8px] text-slate-600 uppercase">Snare Character</p>
                 </div>
-                <input type="range" className="w-full accent-[#2563eb]" min="0" max="1" step="0.1" value={kitSettings.snareTuning} onChange={(e) => setKitSettings({...kitSettings, snareTuning: parseFloat(e.target.value)})} />
-                <div className="flex justify-between text-[8px] font-black text-slate-600 uppercase">
-                    <span>THUDDY LOW</span>
-                    <span>CRACKY HIGH</span>
-                </div>
+                <span className="text-blue-500 italic font-black uppercase text-xs">Standard</span>
+              </div>
+              <input type="range" className="w-full accent-blue-600 h-1 bg-slate-800 rounded-lg appearance-none" 
+                     min="0" max="1" step="0.1" value={kitSettings.snareCharacter} 
+                     onChange={(e)=>setKitSettings({...kitSettings, snareCharacter: parseFloat(e.target.value)})} />
+              <div className="flex justify-between text-[8px] font-black text-slate-600 uppercase">
+                <span>Thuddy Low</span>
+                <span>Cracky High</span>
+              </div>
             </div>
 
-            <div className="bg-[#0a0e1a] p-5 rounded-2xl space-y-4">
-                <div className="flex justify-between items-end">
-                    <div>
-                        <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">RESONANTIE KARAKTER</p>
-                        <p className="text-[7px] font-bold text-slate-600 uppercase mt-1">RELATIE TUSSEN SLAGVEL EN RESO</p>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-[11px] font-black text-[#2563eb] italic uppercase">LANGE RESO</p>
-                        <p className="text-[11px] font-black text-[#2563eb] italic uppercase">(GELIJK)</p>
-                    </div>
+            {/* Resonantie Slider */}
+            <div className="bg-[#141b2b] p-6 rounded-[2rem] border border-white/5 space-y-6">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Resonantie Karakter</p>
+                  <p className="text-[8px] text-slate-600 uppercase">Relatie tussen slagvel en reso</p>
                 </div>
-                <input type="range" className="w-full accent-[#2563eb]" min="0" max="1" step="0.1" value={kitSettings.resoRatio} onChange={(e) => setKitSettings({...kitSettings, resoRatio: parseFloat(e.target.value)})} />
-                <div className="flex justify-between text-[8px] font-black text-slate-600 uppercase">
-                    <span>TOP LAGER</span>
-                    <span>GELIJK</span>
-                    <span>TOP HOGER</span>
+                <div className="text-right">
+                    <p className="text-blue-500 italic font-black uppercase text-xs">Lange Reso</p>
+                    <p className="text-[10px] text-blue-500/50 font-black uppercase">(Gelijk)</p>
                 </div>
+              </div>
+              <input type="range" className="w-full accent-blue-600 h-1 bg-slate-800 rounded-lg appearance-none"
+                     min="0" max="1" step="0.1" value={kitSettings.resonance}
+                     onChange={(e)=>setKitSettings({...kitSettings, resonance: parseFloat(e.target.value)})} />
+              <div className="flex justify-between text-[8px] font-black text-slate-600 uppercase">
+                <span>Top Lager</span>
+                <span>Gelijk</span>
+                <span>Top Hoger</span>
+              </div>
             </div>
 
+            {/* Drum Sizes */}
             <div className="grid grid-cols-2 gap-4">
-                <div className="bg-[#0a0e1a] p-4 rounded-2xl">
-                    <p className="text-[8px] font-black text-slate-500 uppercase mb-3">BASS (")</p>
-                    <input type="number" value={kitSettings.bassSize} onChange={(e) => setKitSettings({...kitSettings, bassSize: parseInt(e.target.value)})} className="w-full bg-slate-800 rounded-xl p-3 text-center font-black text-xl text-white outline-none" />
+               <div className="bg-[#141b2b] p-5 rounded-[1.8rem] border border-white/5">
+                  <p className="text-[9px] font-black text-slate-500 uppercase mb-3">Bass (")</p>
+                  <div className="bg-[#090e18] py-3 rounded-xl text-center text-xl font-black">22</div>
+               </div>
+               <div className="bg-[#141b2b] p-5 rounded-[1.8rem] border border-white/5">
+                  <p className="text-[9px] font-black text-slate-500 uppercase mb-3">Snare (")</p>
+                  <div className="bg-[#090e18] py-3 rounded-xl text-center text-xl font-black">14</div>
+               </div>
+            </div>
+
+            {/* Tom Config */}
+            <div className="bg-[#141b2b] p-6 rounded-[2rem] border border-white/5 space-y-6">
+                <div className="flex justify-between items-center">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Aantal Toms</p>
+                    <span className="text-2xl font-black text-blue-500">{kitSettings.numToms}</span>
                 </div>
-                <div className="bg-[#0a0e1a] p-4 rounded-2xl">
-                    <p className="text-[8px] font-black text-slate-500 uppercase mb-3">SNARE (")</p>
-                    <input type="number" value={kitSettings.snareSize} onChange={(e) => setKitSettings({...kitSettings, snareSize: parseInt(e.target.value)})} className="w-full bg-slate-800 rounded-xl p-3 text-center font-black text-xl text-white outline-none" />
+                <input type="range" className="w-full accent-blue-600 h-1 bg-slate-800 rounded-lg appearance-none"
+                       min="1" max="6" step="1" value={kitSettings.numToms}
+                       onChange={(e)=>setKitSettings({...kitSettings, numToms: parseInt(e.target.value)})} />
+                
+                <div className="grid grid-cols-3 gap-2">
+                    {kitSettings.tomSizes.slice(0, kitSettings.numToms).map((s, i) => (
+                        <div key={i} className="flex flex-col gap-1">
+                            <span className="text-[7px] text-slate-500 font-bold uppercase">Tom {i+1}</span>
+                            <div className="bg-[#090e18] py-4 rounded-xl text-center font-black text-sm">{s}</div>
+                        </div>
+                    ))}
                 </div>
             </div>
 
-            <div className="space-y-3">
-                <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">KLANK KARAKTER</p>
-                <div className="grid grid-cols-2 gap-2">
-                    {['DRY', 'ROCK', 'JAZZ', 'METAL'].map(s => (
+            {/* Klank Karakter */}
+            <div className="space-y-4">
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-2">Klank Karakter</p>
+                <div className="grid grid-cols-2 gap-3">
+                    {['DRY', 'ROCK', 'JAZZ', 'METAL'].map(style => (
                         <button 
-                            key={s} 
-                            onClick={() => setKitSettings({...kitSettings, soundStyle: s.toLowerCase()})}
-                            className={`py-4 rounded-xl text-[10px] font-black tracking-widest transition-all ${kitSettings.soundStyle === s.toLowerCase() ? 'bg-[#2563eb] text-white' : 'bg-[#0a0e1a] text-slate-500'}`}
+                            key={style}
+                            onClick={() => setKitSettings({...kitSettings, soundStyle: style})}
+                            className={`py-4 rounded-2xl font-black text-[10px] tracking-widest transition-all ${kitSettings.soundStyle === style ? 'bg-blue-600' : 'bg-[#141b2b] text-slate-600'}`}
                         >
-                            {s}
+                            {style}
                         </button>
                     ))}
                 </div>
@@ -346,14 +367,14 @@ const App = () => {
 
             <button 
                 onClick={async () => {
-                    if (user && isFirebaseConfigured) {
+                    if (user && db) {
                       await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'kit'), kitSettings);
                     }
                     setView('tuner');
                 }}
-                className="w-full py-5 bg-white text-black rounded-3xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-all"
+                className="w-full py-6 bg-white text-black rounded-3xl font-black uppercase tracking-widest mt-4 shadow-xl active:scale-95 transition-transform"
             >
-                {isFirebaseConfigured ? "OPSLAAN & TOEPASSEN" : "TOEPASSEN (OFFLINE)"}
+                Opslaan & Toepassen
             </button>
           </div>
         )}
